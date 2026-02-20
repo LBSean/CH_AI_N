@@ -75,7 +75,7 @@ services:
       LANGCHAIN_TRACING_V2: "true"
       LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-ai-workspace}
       ENVIRONMENT: development
-      CORS_ORIGINS: '["http://localhost:3000"]'
+      CORS_ORIGINS: '["http://localhost:3002"]'
     ports:
       - "8000:8000"
     volumes:
