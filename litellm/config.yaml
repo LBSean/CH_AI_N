@@ -1,0 +1,68 @@
+model_list:
+  # ── OpenAI ───────────────────────────────────────────────────────────────────
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ── Anthropic ─────────────────────────────────────────────────────────────────
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── Embeddings (routed through same gateway) ──────────────────────────────────
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ── Fallback chain ────────────────────────────────────────────────────────────
+  # Call model "llm" and LiteLLM routes + falls back automatically.
+  - model_name: llm-primary
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: llm-fallback
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  model_group_alias:
+    llm: ["llm-primary", "llm-fallback"]
+
+litellm_settings:
+  # LangSmith tracing for ALL calls through the gateway
+  success_callback: ["langsmith"]
+  failure_callback: ["langsmith"]
+
+  # Semantic cache — requires Redis
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: 6379
+    password: os.environ/REDIS_PASSWORD
+    ttl: 3600
+    similarity_threshold: 0.8
+
+  request_timeout: 60
+  drop_params: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true

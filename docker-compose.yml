@@ -1,0 +1,162 @@
+version: "3.9"
+
+services:
+
+  # ── Postgres + pgvector ──────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aiworkspace
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: devpassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d aiworkspace"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── LiteLLM Proxy (dev only — backend uses library mode in production) ────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: --config /app/config.yaml --port 4000 --detailed_debug
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ""
+      DATABASE_URL: postgresql://admin:devpassword@postgres:5432/aiworkspace
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_TRACING_V2: "true"
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-ai-workspace}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://admin:devpassword@postgres:5432/aiworkspace
+      LITELLM_MODE: proxy
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_TRACING_V2: "true"
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-ai-workspace}
+      ENVIRONMENT: development
+      CORS_ORIGINS: '["http://localhost:3000"]'
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────────
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker --queues ingestion,memory --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql://admin:devpassword@postgres:5432/aiworkspace
+      LITELLM_MODE: proxy
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+      LANGCHAIN_TRACING_V2: "true"
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-ai-workspace}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+
+  # ── Flower (Celery monitoring UI — http://localhost:5555) ─────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app flower --port=5555
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      DATABASE_URL: postgresql://admin:devpassword@postgres:5432/aiworkspace
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-placeholder}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery
+
+  # ── Flowise (RAG prototyping — dev only, never in production) ─────────────────
+  flowise:
+    image: flowiseai/flowise
+    environment:
+      PORT: 3001
+      FLOWISE_USERNAME: ${FLOWISE_USERNAME:-admin}
+      FLOWISE_PASSWORD: ${FLOWISE_PASSWORD:-flowise123}
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: aiworkspace
+      DATABASE_USER: admin
+      DATABASE_PASSWORD: devpassword
+      LANGCHAIN_TRACING_V2: "true"
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
